@@ -1,3 +1,24 @@
+BUILDENV = LINUX
+GCCCMD	= gcc
+G++CMD	= g++
+ADDITIONALLIBPATH =
+STRIPCMD = $(shell $(GCCCMD) -dumpmachine)-strip
+CLEANBUILDDIR = true 
+STATCMD = stat -c%s 
+SHA256CMD = sha256sum
+ifeq ($(shell uname),FreeBSD)
+	SHELL := /usr/local/bin/bash
+	BUILDENV = FREEBSD
+	GCCCMD = gcc9
+	G++CMD = g++9
+	ADDITIONALLIBPATH = -I/usr/lib -I/usr/local/include
+	STRIPCMD = /usr/local/$(shell $(GCCCMD) -dumpmachine)/bin/strip
+	STATCMD = stat -f %k
+	SHA256CMD = sha256
+endif
+
+$(info $(BUILDENV))
+$(info $(STRIPCMD))
 
 .SILENT:
 
@@ -196,6 +217,18 @@ RPI_TAROPT := zcf
 RPI_TAREXT := tar.gz
 RPI_ASYS   := linux_armv6l
 
+FREEBSD_HOST   := x86_64-portbld-freebsd12.2 
+FREEBSD_AHOST  := x86_64-portbld-freebsd12.2 
+FREEBSD_EXT    := .x86_64
+FREEBSD_EXE    := 
+FREEBSD_MKTGT  := linux
+#FREEBSD_BFLGS  := -l:libmd.a LDFLAGS=-static
+FREEBSD_BFLGS := 
+FREEBSD_TARCMD := tar
+FREEBSD_TAROPT := -czf
+FREEBSD_TAREXT := tar.gz
+FREEBSD_ASYS   := linux_x86_64
+
 # Call with $@ to get the appropriate variable for this architecture
 host   = $($(call arch,$(1))_HOST)
 ahost  = $($(call arch,$(1))_AHOST)
@@ -220,7 +253,7 @@ install = $(PWD)/xtensa-lx106-elf$($(call arch,$(1))_EXT)
 
 # GCC et. al configure options
 configure  = --prefix=$(call install,$(1))
-configure += --build=$(shell gcc -dumpmachine)
+configure += --build=$(shell $(GCCCMD) -dumpmachine)
 configure += --host=$(call host,$(1))
 configure += --target=xtensa-lx106-elf
 configure += --disable-shared
@@ -272,10 +305,12 @@ endif
 # Sets the environment variables for a subshell while building
 setenv = export CFLAGS_FOR_TARGET=$(CFFT); \
          export CXXFLAGS_FOR_TARGET=$(CFFT); \
-         export CFLAGS="-I$(call install,$(1))/include -pipe"; \
+         export CFLAGS="-I$(call install,$(1))/include $(ADDITIONALLIBPATH) -pipe"; \
          export LDFLAGS="-L$(call install,$(1))/lib"; \
-         export PATH="$(call install,.stage.LINUX.stage)/bin:$${PATH}"; \
-         export LD_LIBRARY_PATH="$(call install,.stage.LINUX.stage)/lib:$${LD_LIBRARY_PATH}"
+         export PATH="$(call install,.stage.$(BUILDENV).stage)/bin:$${PATH}"; \
+         export LD_LIBRARY_PATH="$(call install,.stage.$(BUILDENV).stage)/lib:$${LD_LIBRARY_PATH}"; \
+	 export CC=$(GCCCMD); \
+	 export CXX=$(G++CMD)
 
 # Creates a package.json file for PlatformIO
 # Package version **must** conform with Semantic Versioning specicfication:
@@ -290,8 +325,8 @@ makepackagejson = ( echo '{' && \
                     echo '}' ) > package.json
 
 # Generates a JSON fragment for an uploaded release artifact
-makejson = tarballsize=$$(stat -c%s $${tarball}); \
-	   tarballsha256=$$(sha256sum $${tarball} | cut -f1 -d" "); \
+makejson = tarballsize=$$($(STATCMD) $${tarball}); \
+	   tarballsha256=$$($(SHA256CMD) $${tarball} | cut -f1 -d" "); \
 	   ( echo '{' && \
 	     echo ' "host": "'$(call ahost,$(1))'",' && \
 	     echo ' "url": "https://github.com/$(GHUSER)/esp-quick-toolchain/releases/download/'$(REL)-$(SUBREL)'/'$${tarball}'",' && \
@@ -303,6 +338,9 @@ makejson = tarballsize=$$(stat -c%s $${tarball}); \
 # The recpies begin here.
 
 linux default: .stage.LINUX.done
+
+freebsd: .stage.FREEBSD.done
+
 
 .PRECIOUS: .stage.% .stage.%.%
 
@@ -472,34 +510,35 @@ clean: .cleaninst.LINUX.clean .cleaninst.LINUX32.clean .cleaninst.WIN32.clean .c
 	echo STAGE: $@
 	rm -rf $(call arena,$@)/hal > $(call log,$@) 2>&1
 	mkdir -p $(call arena,$@)/hal >> $(call log,$@) 2>&1
-	(cd $(call arena,$@)/hal; $(call setenv,$@); $(REPODIR)/lx106-hal/configure --host=xtensa-lx106-elf $$(echo $(call configure,$@) | sed 's/--host=[a-zA-Z0-9_-]*//')) >> $(call log,$@) 2>&1
+	(cd $(call arena,$@)/hal; $(call setenv,$@); CC=xtensa-lx106-elf-gcc CXX=xtensa-lx106-elf-g++ $(REPODIR)/lx106-hal/configure --host=xtensa-lx106-elf $$(echo $(call configure,$@) | sed 's/--host=[a-zA-Z0-9_-]*//')) >> $(call log,$@) 2>&1
 	touch $@
 
 .stage.%.hal-make: .stage.%.hal-config
 	echo STAGE: $@
-	(cd $(call arena,$@)/hal; $(call setenv,$@); $(MAKE)) > $(call log,$@) 2>&1
+	(cd $(call arena,$@)/hal; $(call setenv,$@); CC=xtensa-lx106-elf-gcc CXX=xtensa-lx106-elf-g++ $(MAKE)) > $(call log,$@) 2>&1
 	(cd $(call arena,$@)/hal; $(call setenv,$@); $(MAKE) install) >> $(call log,$@) 2>&1
 	touch $@
 
 .stage.%.strip: .stage.%.hal-make
 	echo STAGE: $@
-	($(call setenv,$@); $(call host,$@)-strip $(call install,$@)/bin/*$(call exe,$@) $(call install,$@)/libexec/gcc/xtensa-lx106-elf/*/c*$(call exe,$@) $(call install,$@)/libexec/gcc/xtensa-lx106-elf/*/lto1$(call exe,$@) || true ) > $(call log,$@) 2>&1
+	($(call setenv,$@); $(STRIPCMD) $(call install,$@)/bin/*$(call exe,$@) $(call install,$@)/libexec/gcc/xtensa-lx106-elf/*/c*$(call exe,$@) $(call install,$@)/libexec/gcc/xtensa-lx106-elf/*/lto1$(call exe,$@) || true ) > $(call log,$@) 2>&1
 	touch $@
 
 .stage.%.post: .stage.%.strip
 	echo STAGE: $@
 	for sh in post/$(GCC)*.sh; do \
-	    [ -x "$${sh}" ] && $${sh} $(call ext,$@) ; \
+	    [ -x "$${sh}" ] && $(SHELL) $${sh} $(call ext,$@) ; \
 	done > $(call log,$@) 2>&1
 	touch $@
 
 .stage.%.package: .stage.%.post
+#.stage.%.package: 
 	echo STAGE: $@
 	rm -rf pkg.$(call arch,$@) > $(call log,$@) 2>&1
 	mkdir -p pkg.$(call arch,$@) >> $(call log,$@) 2>&1
 	cp -a $(call install,$@) pkg.$(call arch,$@)/xtensa-lx106-elf >> $(call log,$@) 2>&1
 	(cd pkg.$(call arch,$@)/xtensa-lx106-elf; $(call setenv,$@); pkgdesc="xtensa-gcc"; pkgname="toolchain-xtensa"; $(call makepackagejson,$@)) >> $(call log,$@) 2>&1
-	(tarball=$(call host,$@).xtensa-lx106-elf-$$(git rev-parse --short HEAD).$(STAMP).$(call tarext,$@) ; \
+	(tarball=$(shell $(GCCCMD) -dumpmachine).xtensa-lx106-elf-$$(git rev-parse --short HEAD).$(STAMP).$(call tarext,$@) ; \
 	    cd pkg.$(call arch,$@) && $(call tarcmd,$@) $(call taropt,$@) ../$${tarball} xtensa-lx106-elf/ ; cd ..; $(call makejson,$@)) >> $(call log,$@) 2>&1
 	rm -rf pkg.$(call arch,$@) >> $(call log,$@) 2>&1
 	touch $@
@@ -511,8 +550,8 @@ clean: .cleaninst.LINUX.clean .cleaninst.LINUX32.clean .cleaninst.WIN32.clean .c
 	# Dependencies borked in mkspiffs makefile, so don't use parallel make
 	(cd $(call arena,$@)/mkspiffs;\
 	    $(call setenv,$@); \
-	    TARGET_OS=$(call mktgt,$@) CC=$(call host,$@)-gcc CXX=$(call host,$@)-g++ STRIP=$(call host,$@)-strip \
-            make -j1 clean mkspiffs$(call exe,$@) BUILD_CONFIG_NAME="-arduino-esp8266" CPPFLAGS="-DSPIFFS_USE_MAGIC_LENGTH=0 -DSPIFFS_ALIGNED_OBJECT_INDEX_TABLES=1") >> $(call log,$@) 2>&1
+	    TARGET_OS=$(call mktgt,$@) STRIP=$(STRIPCMD) \
+            $(MAKE) -j1 clean mkspiffs$(call exe,$@) BUILD_CONFIG_NAME="-arduino-esp8266" CPPFLAGS="-DSPIFFS_USE_MAGIC_LENGTH=0 -DSPIFFS_ALIGNED_OBJECT_INDEX_TABLES=1") >> $(call log,$@) 2>&1
 	rm -rf pkg.mkspiffs.$(call arch,$@) >> $(call log,$@) 2>&1
 	mkdir -p pkg.mkspiffs.$(call arch,$@)/mkspiffs >> $(call log,$@) 2>&1
 	(cd pkg.mkspiffs.$(call arch,$@)/mkspiffs; $(call setenv,$@); pkgdesc="mkspiffs-utility"; pkgname="mkspiffs"; $(call makepackagejson,$@)) >> $(call log,$@) 2>&1
@@ -529,8 +568,8 @@ clean: .cleaninst.LINUX.clean .cleaninst.LINUX32.clean .cleaninst.WIN32.clean .c
 	# Dependencies borked in mklittlefs makefile, so don't use parallel make
 	(cd $(call arena,$@)/mklittlefs;\
 	    $(call setenv,$@); \
-	    TARGET_OS=$(call mktgt,$@) CC=$(call host,$@)-gcc CXX=$(call host,$@)-g++ STRIP=$(call host,$@)-strip \
-            make -j1 clean mklittlefs$(call exe,$@) BUILD_CONFIG_NAME="-arduino-esp8266") >> $(call log,$@) 2>&1
+	    TARGET_OS=$(call mktgt,$@) STRIP=$(STRIPCMD) \
+            $(MAKE) -j1 clean mklittlefs$(call exe,$@) BUILD_CONFIG_NAME="-arduino-esp8266") >> $(call log,$@) 2>&1
 	rm -rf pkg.mklittlefs.$(call arch,$@) >> $(call log,$@) 2>&1
 	mkdir -p pkg.mklittlefs.$(call arch,$@)/mklittlefs >> $(call log,$@) 2>&1
 	(cd pkg.mklittlefs.$(call arch,$@)/mklittlefs; $(call setenv,$@); pkgdesc="littlefs-utility"; pkgname="mklittlefs"; $(call makepackagejson,$@)) >> $(call log,$@) 2>&1
@@ -547,8 +586,8 @@ clean: .cleaninst.LINUX.clean .cleaninst.LINUX32.clean .cleaninst.WIN32.clean .c
 	# Dependencies borked in esptool makefile, so don't use parallel make
 	(cd $(call arena,$@)/esptool;\
 	    $(call setenv,$@); \
-	    TARGET_OS=$(call mktgt,$@) CC=$(call host,$@)-gcc CXX=$(call host,$@)-g++ STRIP=$(call host,$@)-strip \
-            make -j1 clean esptool$(call exe,$@) BUILD_CONFIG_NAME="-arduino-esp8266") >> $(call log,$@) 2>&1
+	    TARGET_OS=$(call mktgt,$@) STRIP=$(STRIPCMD) \
+            $(MAKE) -j1 clean esptool$(call exe,$@) BUILD_CONFIG_NAME="-arduino-esp8266") >> $(call log,$@) 2>&1
 	rm -rf pkg.esptool.$(call arch,$@) >> $(call log,$@) 2>&1
 	mkdir -p pkg.esptool.$(call arch,$@)/esptool >> $(call log,$@) 2>&1
 	cp $(call arena,$@)/esptool/esptool$(call exe,$@) pkg.esptool.$(call arch,$@)/esptool/. >> $(call log,$@) 2>&1
