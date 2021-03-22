@@ -221,13 +221,13 @@ FREEBSD_HOST   := x86_64-portbld-freebsd12.2
 FREEBSD_AHOST  := x86_64-portbld-freebsd12.2 
 FREEBSD_EXT    := .x86_64
 FREEBSD_EXE    := 
-FREEBSD_MKTGT  := linux
+FREEBSD_MKTGT  := freebsd 
 #FREEBSD_BFLGS  := -l:libmd.a LDFLAGS=-static
 FREEBSD_BFLGS := 
 FREEBSD_TARCMD := tar
 FREEBSD_TAROPT := -czf
 FREEBSD_TAREXT := tar.gz
-FREEBSD_ASYS   := linux_x86_64
+FREEBSD_ASYS   := freebsd_x86_64
 
 # Call with $@ to get the appropriate variable for this architecture
 host   = $($(call arch,$(1))_HOST)
